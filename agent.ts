@@ -308,10 +308,12 @@ function renderAsciiMap(
   type Agreement    = { type: string; with_nation_id: string }
   type LBEntry      = { nation_id: string; nation_name: string; rank: number }
 
-  const ownedCells       = (state.owned_cells       as OwnedCell[]  ) ?? []
-  const visibleEnemies   = (state.visible_enemies   as EnemyEntry[] ) ?? []
-  const activeAgreements = (state.active_agreements as Agreement[]  ) ?? []
-  const leaderboard      = (state.leaderboard       as LBEntry[]    ) ?? []
+  type UnclaimedCell = { x: number; y: number; terrain: string }
+  const ownedCells        = (state.owned_cells        as OwnedCell[]    ) ?? []
+  const visibleEnemies    = (state.visible_enemies    as EnemyEntry[]   ) ?? []
+  const visibleUnclaimed  = (state.visible_unclaimed  as UnclaimedCell[]) ?? []
+  const activeAgreements  = (state.active_agreements  as Agreement[]    ) ?? []
+  const leaderboard       = (state.leaderboard        as LBEntry[]      ) ?? []
 
   // NAP partners
   const napIds = new Set(activeAgreements.filter(a => a.type === 'nap').map(a => a.with_nation_id))
@@ -328,9 +330,13 @@ function renderAsciiMap(
   // Build cell map: "x,y" -> display char
   const grid = new Map<string, string>()
 
-  // Expansion targets — unclaimed cells; show terrain type
-  // l=land (best income), r=rough (defender bonus), m=mountain (hard to take)
-  const terrainChar: Record<string, string> = { land: 'l', rough: 'r', mountain: 'm', city: 'l' }
+  // Visible unclaimed/water cells (fog window, distance 2 from own territory)
+  const terrainChar: Record<string, string> = { land: 'l', rough: 'r', mountain: 'm', city: 'C', water: '~' }
+  for (const c of visibleUnclaimed) {
+    grid.set(`${c.x},${c.y}`, terrainChar[c.terrain] ?? 'l')
+  }
+
+  // Expansion targets — 1-square unclaimed cells (overwrite; city shows as C not l)
   for (const t of expansionTargets) {
     grid.set(`${t.x},${t.y}`, terrainChar[t.terrain ?? 'land'] ?? 'l')
   }
@@ -388,7 +394,7 @@ function renderAsciiMap(
   return [
     'TACTICAL MAP (fog of war active):',
     lines.join('\n'),
-    'Legend: C=your city  1-9=your cells (army strength)  l=unclaimed land(best)  r=rough  m=mountain  UPPER=hostile  lower=NAP ally  (space)=unknown/fogged',
+    'Legend: C=city  1-9=your cells(army)  l=unclaimed land  r=rough  m=mountain  ~=water  UPPER=hostile  lower=NAP ally  (space)=fogged',
     `MAP_KEY:${JSON.stringify(keyEntries)}`,
   ].join('\n')
 }
