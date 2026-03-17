@@ -253,6 +253,7 @@ function loadStrategy(): string {
 Expansion always comes first. Submit advance orders to every unclaimed cell adjacent to my territory every tick. Never hold at 1 territory — expanding is the only way to grow income.
 
 If territory < 10: expand aggressively. Accept some deficit temporarily — more cells = more income.
+After each wave of expansion your frontier cells will have army=1 and stall. When this happens, add recruit orders (amount=2) on your highest-pop owned cells alongside your advance orders. This refills army for the next wave.
 
 If territory >= 10: consolidate before attacking further. Recruit at high-population cells. Only attack when frontier army >= 1.5x the enemy's.
 
@@ -373,6 +374,7 @@ ORDER TYPES:
 RULES:
   - advance is your primary expansion tool — submit advance orders for every cell you want to own. The engine handles move-vs-attack automatically. Auto-removed when you own the target.
   - Use expansion_targets from each frontier cell for advance order coordinates — these are the exact adjacent unclaimed non-water cells you can claim. Never advance to a coordinate not in expansion_targets.
+  - advance only fires if an adjacent owned cell has army > 1. If all your cells have army=1, recruit first to build army, then advance.
   - Only attack/move to adjacent cells (sharing a border)
   - Only recruit at owned cells with pop_regen > 0
   - Keep surplus positive — income minus upkeep. Deficit stage 3 causes attrition.
