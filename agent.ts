@@ -253,7 +253,10 @@ function loadStrategy(): string {
 Expansion always comes first. Submit advance orders to every coordinate in the expansion_targets list every tick. Never hold at 1 territory — expanding is the only way to grow income.
 
 If territory < 10: expand aggressively. Accept some deficit temporarily — more cells = more income.
-After each expansion wave, check expansion_targets for source_army=1 entries — those advances are stalled. Recruit (amount=2) on the source cell (the owned cell adjacent to the stalled target), NOT on interior cells. Interior army cannot reach expansion targets.
+After each expansion wave, check expansion_targets for source_army=1 entries — those advances are stalled. Fix stalls two ways:
+1. Reinforce: use reinforce orders to push army from interior cells (army > 5) toward the stalled frontier cell. This is fast.
+2. Recruit: recruit on the stalled source cell if it has population. Recruit at interior cells only if they are adjacent to a stalled frontier cell.
+Always prefer reinforce over recruit if you have idle interior army — it's free.
 
 If territory >= 10: consolidate before attacking further. Recruit at high-population cells. Only attack when frontier army >= 1.5x the enemy's.
 
@@ -419,7 +422,8 @@ ORDER TYPES:
 RULES:
   - advance is your primary expansion tool — submit advance orders for every cell you want to own. The engine handles move-vs-attack automatically. Auto-removed when you own the target.
   - The top-level expansion_targets list contains every adjacent unclaimed cell you can advance into. Each entry has source_army — the army of the strongest adjacent owned cell that would be used as the source.
-  - advance ONLY fires if source_army > 1. If source_army = 1, the advance is stalled — you must recruit on that source cell to arm it before the advance will work. Recruiting at interior cells with high army does nothing for expansion.
+  - advance ONLY fires if source_army > 1. If source_army = 1, the advance is stalled. Fix it by: (a) reinforcing army from an interior cell to the stalled source cell, or (b) recruiting on the source cell itself.
+  - reinforce is free (no population cost) and moves army through your territory — use it to push idle interior army to the frontier. from= interior cell with excess army, to= the stalled frontier cell adjacent to your expansion target.
   - Never advance to a frontier_cell coordinate — those are cells you already own.
   - Only attack/move to adjacent cells (sharing a border)
   - Only recruit at owned cells with pop_regen > 0
