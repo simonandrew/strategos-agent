@@ -367,6 +367,7 @@ ORDER TYPES:
 
 RULES:
   - advance is your primary expansion tool — submit advance orders for every cell you want to own. The engine handles move-vs-attack automatically. Auto-removed when you own the target.
+  - Use expansion_targets from each frontier cell for advance order coordinates — these are the exact adjacent unclaimed non-water cells you can claim. Never advance to a coordinate not in expansion_targets.
   - Only attack/move to adjacent cells (sharing a border)
   - Only recruit at owned cells with pop_regen > 0
   - Keep surplus positive — income minus upkeep. Deficit stage 3 causes attrition.
