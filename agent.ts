@@ -59,6 +59,11 @@ import { config as loadDotenv } from 'dotenv'
 // Load .env from the current working directory (silently ignored if absent)
 loadDotenv()
 
+const DEBUG = process.env.DEBUG === 'true' || process.env.DEBUG === '1'
+function dbg(...args: unknown[]): void {
+  if (DEBUG) console.log('  [debug]', ...args)
+}
+
 // Order types — mirrors src/domain/index.ts (inlined so this file is self-contained)
 type Coordinate = { x: number; y: number }
 export type Order =
@@ -399,6 +404,10 @@ ${buildContext(state, lastOrders)}
 
 Review your current_standing_orders and submit updated orders (or resubmit unchanged if still appropriate).`
 
+  dbg('── LLM request (tool-use) ──────────────────────')
+  dbg('system:', SYSTEM_PROMPT)
+  dbg('user:', userMessage)
+
   const response = await client.chat.completions.create({
     model:       LLM_MODEL,
     max_tokens:  priority === 'critical' ? 2048 : 1024,
@@ -409,6 +418,9 @@ Review your current_standing_orders and submit updated orders (or resubmit uncha
     tools:       [SUBMIT_ORDERS_TOOL],
     tool_choice: { type: 'function', function: { name: 'submit_orders' } },
   })
+
+  dbg('── LLM response ────────────────────────────────')
+  dbg(JSON.stringify(response.choices[0]?.message, null, 2))
 
   const toolCall = response.choices[0]?.message?.tool_calls?.[0]
   if (!toolCall || toolCall.type !== 'function') return { orders: [], reasoning: '' }
@@ -455,6 +467,10 @@ Order types and fields:
   { "type": "withdraw",  "from": {"x":N,"y":N}, "to": {"x":N,"y":N}, "units": N }
   { "type": "hold",      "at": {"x":N,"y":N} }`
 
+  dbg('── LLM request (json-mode) ─────────────────────')
+  dbg('system:', SYSTEM_PROMPT)
+  dbg('user:', userMessage)
+
   const response = await client.chat.completions.create({
     model:       LLM_MODEL,
     max_tokens:  priority === 'critical' ? 2048 : 1024,
@@ -464,6 +480,9 @@ Order types and fields:
     ],
     response_format: { type: 'json_object' },
   })
+
+  dbg('── LLM response ────────────────────────────────')
+  dbg(response.choices[0]?.message?.content)
 
   const text = response.choices[0]?.message?.content ?? '{}'
   const input = JSON.parse(text) as { orders?: Order[]; reasoning?: string }
@@ -490,17 +509,23 @@ let lastOrders: Order[] = []
 
 async function putOrders(orders: Order[]): Promise<void> {
   const url = `${SERVER_URL}/v1/seasons/${SEASON_ID!}/nations/${NATION_ID!}/orders`
+  const body = JSON.stringify({ orders })
+  dbg('── PUT /orders request ─────────────────────────')
+  dbg(url)
+  dbg(body)
   const res = await fetch(url, {
     method:  'PUT',
     headers: {
       'Content-Type':  'application/json',
       'Authorization': `Bearer ${TOKEN}`,
     },
-    body: JSON.stringify({ orders }),
+    body,
   })
+  const resText = await res.text().catch(() => '')
+  dbg('── PUT /orders response ────────────────────────')
+  dbg(`${res.status} ${res.statusText}`, resText)
   if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    console.warn(`  PUT /orders failed: ${res.status} ${body}`)
+    console.warn(`  PUT /orders failed: ${res.status} ${resText}`)
   } else {
     lastOrders = orders
   }
@@ -609,7 +634,10 @@ async function handleEvent(type: string, data: string): Promise<void> {
   )
 
   // Skip if: not significant, not stuck, and already have orders
-  if (!significant && !stuck && hasOrders) return
+  if (!significant && !stuck && hasOrders) {
+    dbg(`skip tick=${tick} (routine, hasOrders)`)
+    return
+  }
 
   // Throttle: skip notable events within MIN_TICKS window (critical/stuck always fires)
   const ticksSinceLast = tick - lastCallTick
@@ -617,6 +645,10 @@ async function handleEvent(type: string, data: string): Promise<void> {
     console.log(`  throttled (${ticksSinceLast}/${MIN_TICKS_BETWEEN_CALLS} ticks since last call)`)
     return
   }
+
+  dbg('── state snapshot ──────────────────────────────')
+  dbg('frontier_cells:', JSON.stringify((state as Record<string, unknown>).frontier_cells, null, 2))
+  dbg('standing_orders:', JSON.stringify(lastOrders, null, 2))
 
   const effectivePriority = stuck ? 'critical' : priority
   const effectiveReasons  = stuck ? [...reasons, 'stuck'] : reasons
