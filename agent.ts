@@ -327,7 +327,7 @@ function renderAsciiMap(
 
   // Expansion targets — unclaimed cells; show terrain type
   // l=land (best income), r=rough (defender bonus), m=mountain (hard to take)
-  const terrainChar: Record<string, string> = { land: 'l', rough: 'r', mountain: 'm', core: 'l' }
+  const terrainChar: Record<string, string> = { land: 'l', rough: 'r', mountain: 'm', city: 'l' }
   for (const t of expansionTargets) {
     grid.set(`${t.x},${t.y}`, terrainChar[t.terrain ?? 'land'] ?? 'l')
   }
@@ -340,7 +340,7 @@ function renderAsciiMap(
 
   // Own cells (rendered last — overwrites enemy/expansion overlaps if any)
   for (const c of ownedCells) {
-    if (c.terrain === 'core') { grid.set(`${c.x},${c.y}`, 'C'); continue }
+    if (c.terrain === 'city') { grid.set(`${c.x},${c.y}`, 'C'); continue }
     if (c.terrain === 'water') { grid.set(`${c.x},${c.y}`, '~'); continue }
     const a = Math.max(0, Math.min(9, Math.round(c.army)))
     grid.set(`${c.x},${c.y}`, a > 0 ? String(a) : '#')
@@ -385,7 +385,7 @@ function renderAsciiMap(
   return [
     'TACTICAL MAP (fog of war active):',
     lines.join('\n'),
-    'Legend: C=your core  1-9=your cells (army strength)  l=unclaimed land(best)  r=rough  m=mountain  UPPER=hostile  lower=NAP ally  (space)=unknown/fogged',
+    'Legend: C=your city  1-9=your cells (army strength)  l=unclaimed land(best)  r=rough  m=mountain  UPPER=hostile  lower=NAP ally  (space)=unknown/fogged',
     `MAP_KEY:${JSON.stringify(keyEntries)}`,
   ].join('\n')
 }
@@ -567,7 +567,7 @@ RULES:
   - advance ONLY fires if source_army > 1. Each expansion_target includes source_cell — the owned cell that would fire the advance. If source_army = 1, that source_cell needs more army before the advance can fire.
   - reinforce sends exactly min(units, army-1) troops — you MUST keep 1 in the source. If army=1, reinforce sends 0 units and does nothing. Never reinforce from a cell with army=1.
   - When ALL source_army values are 1 (all advances stalled), you CANNOT reinforce yet. You MUST recruit first to build army above 1, THEN reinforce. Look for the ALL ADVANCES STALLED block for guidance.
-  - recruit converts pop_stock into army at rate of 5 pop per unit. Recruit on cells with high pop_stock — especially core cells. After recruiting, army will be high enough to reinforce or advance directly.
+  - recruit converts pop_stock into army at rate of 5 pop per unit. Recruit on cells with high pop_stock — especially city cells. After recruiting, army will be high enough to reinforce or advance directly.
   - reinforce is free (no population cost) — use it to push army from high-army interior cells to stalled frontier source cells.
   - Never advance to a frontier_cell coordinate — those are cells you already own.
   - Only attack/move to adjacent cells (sharing a border)

@@ -83,7 +83,7 @@ interface NationStateView {
 interface CellSummary {
   x:                number
   y:                number
-  terrain:          'land' | 'rough' | 'mountain' | 'core' | 'water'
+  terrain:          'land' | 'rough' | 'mountain' | 'city' | 'water'
   army_strength:    number
   population_stock: number
   population_max:   number
@@ -221,7 +221,7 @@ Understanding the economy helps you avoid deficit:
 | `land` | Standard — most common |
 | `rough` | Defender bonus, harder to take |
 | `mountain` | Strong defender bonus |
-| `core` | Your starting cell — fortified |
+| `city` | Your starting cell — fortified |
 | `water` | Impassable |
 
 ---

@@ -14,7 +14,7 @@ Your final score is a weighted composite:
 |----------------------|--------|-------------------|
 | Territory            | 35%    | Fraction of traversable cells you own |
 | Military strength    | 15%    | Total army normalised by territory size |
-| Core retention       | 15%    | Whether you still hold your starting cells |
+| City retention       | 15%    | Whether you still hold your starting cells |
 | Resource efficiency  | 10%    | Surplus-to-upkeep ratio |
 | Survival             | 10%    | Still alive at season end |
 | Diplomacy            | 5%     | Agreements kept, betrayals avoided |
@@ -35,7 +35,7 @@ The grid is made of cells. Each cell has a terrain type and may be owned by a na
 | `land`     | Standard. No combat modifier. |
 | `rough`    | Defender bonus — costs more army to capture. |
 | `mountain` | Strong defender bonus — significantly harder to capture. |
-| `core`     | Your starting cell. Heavily fortified. Losing it hurts your score. |
+| `city`     | Your starting cell. Heavily fortified. Losing it hurts your score. |
 | `water`    | Impassable. Cannot be owned or crossed. |
 
 ### Fog of war
@@ -240,7 +240,7 @@ When army meets army the outcome is probabilistic, weighted by strength and terr
 - Attacking with **2× the defender's army** wins the majority of the time on flat terrain
 - **Rough terrain:** defender needs ~1.5× fewer units to hold
 - **Mountain terrain:** defender needs ~2× fewer units to hold — very hard to take by force
-- **Core cells:** strongly fortified — avoid attacking enemy cores unless you have overwhelming force
+- **City cells:** strongly fortified — avoid attacking enemy cores unless you have overwhelming force
 
 There is no guaranteed outcome — randomness is involved. Larger army advantage = higher win probability, not a guarantee.
 
