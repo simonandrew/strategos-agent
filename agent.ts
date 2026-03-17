@@ -420,7 +420,7 @@ function buildContext(state: Record<string, unknown>, standingOrders: Order[]): 
   }
 
   const seen = new Set<string>()
-  const expansionTargets: Array<{ x: number; y: number; source_army: number }> = []
+  const expansionTargets: Array<{ x: number; y: number; source_army: number; source_cell: { x: number; y: number } | null }> = []
   for (const fc of (s.frontier_cells ?? [])) {
     for (const t of (fc.expansion_targets ?? [])) {
       const k = `${t.x},${t.y}`
@@ -430,8 +430,13 @@ function buildContext(state: Record<string, unknown>, standingOrders: Order[]): 
         { x: t.x - 1, y: t.y }, { x: t.x + 1, y: t.y },
         { x: t.x, y: t.y - 1 }, { x: t.x, y: t.y + 1 },
       ]
-      const sourceArmy = Math.max(0, ...neighbors.map(n => ownedArmyByCoord.get(`${n.x},${n.y}`) ?? 0))
-      expansionTargets.push({ x: t.x, y: t.y, source_army: sourceArmy })
+      let sourceArmy = 0
+      let sourceCell: { x: number; y: number } | null = null
+      for (const n of neighbors) {
+        const a = ownedArmyByCoord.get(`${n.x},${n.y}`) ?? 0
+        if (a > sourceArmy) { sourceArmy = a; sourceCell = n }
+      }
+      expansionTargets.push({ x: t.x, y: t.y, source_army: sourceArmy, source_cell: sourceCell })
     }
   }
 
@@ -443,14 +448,32 @@ function buildContext(state: Record<string, unknown>, standingOrders: Order[]): 
   // Strip expansion_targets from individual frontier cells — it's now at top level
   const frontierStripped = (s.frontier_cells ?? []).map(({ expansion_targets: _, ...rest }) => rest)
 
-  // Sort owned cells by pop_stock desc so the model sees best recruit spots first
-  const ownedSorted = [...(s.owned_cells ?? [])].sort((a, b) => b.pop_stock - a.pop_stock)
+  // Sort owned cells by army desc — shows reinforce sources (high army) first
+  const ownedSorted = [...(s.owned_cells ?? [])].sort((a, b) => b.army - a.army)
+
+  // Stall detection — when every expansion target is blocked, the agent MUST recruit
+  // before any advance can fire. Pre-compute the diagnosis to avoid LLM confusion.
+  const allStalled = expansionTargets.length > 0 && expansionTargets.every(t => t.source_army <= 1)
+  const stalledBlock = allStalled ? (() => {
+    const recruitCandidates = [...(s.owned_cells ?? [])]
+      .filter(c => c.pop_stock >= 5)
+      .sort((a, b) => b.pop_stock - a.pop_stock)
+      .slice(0, 4)
+      .map(c => ({ x: c.x, y: c.y, pop_stock: c.pop_stock, army: c.army }))
+    return `ALL ADVANCES STALLED — every source_cell has army=1.\n` +
+      `reinforce sends army-1 units: if army=1 you send 0. Reinforcing from army=1 cells does nothing.\n` +
+      `REQUIRED ACTION: recruit first to build army, then reinforce to frontier.\n` +
+      `Best recruit candidates (high pop_stock):\n` +
+      recruitCandidates.map(c => `  recruit at {x:${c.x},y:${c.y}} — pop_stock=${c.pop_stock} (each unit costs 5 pop)`).join('\n')
+  })() : null
+
+  if (stalledBlock) parts.push(stalledBlock)
 
   parts.push(JSON.stringify({
     economy:                 s.economy,
     standing:                s.standing,
-    expansion_targets:       expansionTargets,   // source_army=1 means advance is stalled — recruit on that source cell first
-    owned_cells:             ownedSorted,        // pop_stock/pop_regen tells you where to recruit
+    expansion_targets:       expansionTargets,   // source_cell = owned cell that would fire the advance; source_army=1 means stalled
+    owned_cells:             ownedSorted,        // sorted by army desc — high army cells are reinforce sources
     frontier_cells:          frontierStripped,
     disconnected_cells:      s.disconnected_cells,
     visible_enemies:         s.visible_enemies,
@@ -529,8 +552,11 @@ ORDER TYPES:
 RULES:
   - advance is your primary expansion tool — submit advance orders for every cell you want to own. The engine handles move-vs-attack automatically. Auto-removed when you own the target.
   - The top-level expansion_targets list contains every adjacent unclaimed cell you can advance into. Each entry has source_army — the army of the strongest adjacent owned cell that would be used as the source.
-  - advance ONLY fires if source_army > 1. If source_army = 1, the advance is stalled. Fix it by: (a) reinforcing army from an interior cell to the stalled source cell, or (b) recruiting on the source cell itself.
-  - reinforce is free (no population cost) and moves army through your territory — use it to push idle interior army to the frontier. from= interior cell with excess army, to= the stalled frontier cell adjacent to your expansion target.
+  - advance ONLY fires if source_army > 1. Each expansion_target includes source_cell — the owned cell that would fire the advance. If source_army = 1, that source_cell needs more army before the advance can fire.
+  - reinforce sends exactly min(units, army-1) troops — you MUST keep 1 in the source. If army=1, reinforce sends 0 units and does nothing. Never reinforce from a cell with army=1.
+  - When ALL source_army values are 1 (all advances stalled), you CANNOT reinforce yet. You MUST recruit first to build army above 1, THEN reinforce. Look for the ALL ADVANCES STALLED block for guidance.
+  - recruit converts pop_stock into army at rate of 5 pop per unit. Recruit on cells with high pop_stock — especially core cells. After recruiting, army will be high enough to reinforce or advance directly.
+  - reinforce is free (no population cost) — use it to push army from high-army interior cells to stalled frontier source cells.
   - Never advance to a frontier_cell coordinate — those are cells you already own.
   - Only attack/move to adjacent cells (sharing a border)
   - Only recruit at owned cells with pop_regen > 0
