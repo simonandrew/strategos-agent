@@ -93,7 +93,7 @@ const archetypeFlag = process.argv.includes('--archetype') ? arg('--archetype') 
 const strategyFile  = resolve(
   archetypeFlag
     ? `strategies/${archetypeFlag}.md`
-    : arg('--strategy', 'strategy.md'),
+    : arg('--strategy') ?? 'strategy.md',
 )
 
 // ── LLM provider config ────────────────────────────────────────────
@@ -103,7 +103,7 @@ const strategyFile  = resolve(
 
 const LLM_BASE_URL = process.env.LLM_BASE_URL ?? 'https://api.openai.com/v1'
 const LLM_API_KEY  = process.env.LLM_API_KEY  ?? process.env.OPENAI_API_KEY ?? 'no-key-required'
-const LLM_MODEL    = process.env.LLM_MODEL    ?? arg('--model', 'gpt-4o-mini')
+const LLM_MODEL    = process.env.LLM_MODEL    ?? arg('--model') ?? 'gpt-4o-mini'
 
 // Some local providers (LM Studio, Ollama) don't support function calling.
 // Set LLM_JSON_MODE=true to use JSON output mode instead.
@@ -509,6 +509,8 @@ async function putOrders(orders: Order[]): Promise<void> {
 
 let hasOrders    = false
 let lastCallTick = -999
+let lastTick     = 0
+let lastState:   Record<string, unknown> = {}
 
 async function connect(): Promise<void> {
   const url = `${SERVER_URL}/v1/stream?season_id=${SEASON_ID!}&token=${TOKEN!}`
@@ -579,6 +581,8 @@ async function handleEvent(type: string, data: string): Promise<void> {
   }
 
   const { tick, significant, priority = 'notable', reasons, state } = payload
+  lastTick  = tick
+  lastState = state
   const standing = state.standing as { territory?: number; rank?: number } | undefined
   const economy  = state.economy  as { army?: number; surplus?: number }   | undefined
 
@@ -737,7 +741,18 @@ rl.on('line', async (line) => {
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TOKEN}` },
       body:    JSON.stringify({ text }),
     })
-    console.log(`  decree ${r.ok ? 'issued' : `failed (${r.status})`}: "${text}"`)
+    if (!r.ok) { console.warn(`  decree failed (${r.status})`); return }
+    console.log(`  decree issued: "${text}" — re-evaluating orders...`)
+
+    // Immediately call LLM with cached state, bypassing throttle
+    if (Object.keys(lastState).length === 0) return
+    const t0 = Date.now()
+    const { orders, reasoning } = await decideOrders(lastTick, lastState, ['decree_issued'], 'critical', lastOrders)
+    console.log(`  orders=${orders.length} | ${Date.now() - t0}ms`)
+    await putOrders(orders)
+    appendGameLog(lastTick, 'critical', ['decree_issued'], reasoning || '(no reasoning)', orders.length)
+    hasOrders    = true
+    lastCallTick = lastTick
   } catch (err) {
     console.error('  decree error:', err)
   }
