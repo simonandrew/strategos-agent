@@ -245,13 +245,13 @@ function loadStrategy(): string {
   if (!existsSync(strategyFile)) {
     const defaultStrategy = `# My Strategos
 
-Expand aggressively in the first 30 ticks — attack unclaimed land and any weak neighbours.
+Expansion always comes first. Submit advance orders to every unclaimed cell adjacent to my territory every tick. Never hold at 1 territory — expanding is the only way to grow income.
 
-Once territory exceeds 15 cells, consolidate: recruit to build up garrisons before further attacks.
+If territory < 10: expand aggressively. Accept some deficit temporarily — more cells = more income.
 
-Always attack if my frontier army is at least 1.5× the enemy's. Never attack if their army is larger than mine.
+If territory >= 10: consolidate before attacking further. Recruit at high-population cells. Only attack when frontier army >= 1.5x the enemy's.
 
-In deficit: stop recruiting, retreat from isolated cells, hold the core.
+In deficit with territory >= 10: stop recruiting, retreat from isolated cells, hold the core.
 
 Target the weakest nation on the leaderboard. Respect NAPs — never attack an ally.
 `
