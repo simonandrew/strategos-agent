@@ -507,10 +507,13 @@ async function putOrders(orders: Order[]): Promise<void> {
 
 // ── SSE connection ─────────────────────────────────────────────────
 
-let hasOrders    = false
-let lastCallTick = -999
-let lastTick     = 0
-let lastState:   Record<string, unknown> = {}
+let hasOrders      = false
+let lastCallTick   = -999
+let lastTick       = 0
+let lastState:     Record<string, unknown> = {}
+let lastTerritory  = 0
+let stuckSinceTick = 0
+const STUCK_TICKS  = 5   // force re-evaluation if territory unchanged for this many ticks
 
 async function connect(): Promise<void> {
   const url = `${SERVER_URL}/v1/stream?season_id=${SEASON_ID!}&token=${TOKEN!}`
@@ -588,29 +591,40 @@ async function handleEvent(type: string, data: string): Promise<void> {
   const standing = state.standing as { territory?: number; rank?: number } | undefined
   const economy  = state.economy  as { army?: number; surplus?: number }   | undefined
 
+  // Stuck detection: force re-evaluation if territory hasn't grown
+  const territory = standing?.territory ?? 0
+  if (territory > lastTerritory) {
+    lastTerritory  = territory
+    stuckSinceTick = tick
+  }
+  const stuck = hasOrders && (tick - stuckSinceTick) >= STUCK_TICKS
+
   console.log(
     `  tick=${String(tick).padStart(4)} | ` +
-    `territory=${standing?.territory ?? '?'} | ` +
+    `territory=${territory} | ` +
     `army=${economy?.army ?? '?'} | ` +
     `surplus=${economy?.surplus !== undefined ? (economy.surplus >= 0 ? '+' : '') + economy.surplus.toFixed(2) : '?'} | ` +
-    `${priority} [${reasons.join(', ')}]`,
+    `${priority} [${reasons.join(', ')}]${stuck ? ' [stuck]' : ''}`,
   )
 
-  // Skip if: not significant and already have orders
-  if (!significant && hasOrders) return
+  // Skip if: not significant, not stuck, and already have orders
+  if (!significant && !stuck && hasOrders) return
 
-  // Throttle: skip notable events within MIN_TICKS window (critical always fires)
+  // Throttle: skip notable events within MIN_TICKS window (critical/stuck always fires)
   const ticksSinceLast = tick - lastCallTick
-  if (priority !== 'critical' && hasOrders && ticksSinceLast < MIN_TICKS_BETWEEN_CALLS) {
+  if (priority !== 'critical' && !stuck && hasOrders && ticksSinceLast < MIN_TICKS_BETWEEN_CALLS) {
     console.log(`  throttled (${ticksSinceLast}/${MIN_TICKS_BETWEEN_CALLS} ticks since last call)`)
     return
   }
+
+  const effectivePriority = stuck ? 'critical' : priority
+  const effectiveReasons  = stuck ? [...reasons, 'stuck'] : reasons
 
   const t0 = Date.now()
   let orders: Order[] = []
   let reasoning = ''
   try {
-    ;({ orders, reasoning } = await decideOrders(tick, state, reasons, priority, lastOrders))
+    ;({ orders, reasoning } = await decideOrders(tick, state, effectiveReasons, effectivePriority, lastOrders))
   } catch (err) {
     console.error(`  [tick ${tick}] LLM error:`, err)
     return
@@ -620,7 +634,8 @@ async function handleEvent(type: string, data: string): Promise<void> {
   console.log(`  orders=${orders.length} | ${ms}ms`)
 
   await putOrders(orders)
-  appendGameLog(tick, priority, reasons, reasoning || '(no reasoning)', orders.length)
+  appendGameLog(tick, effectivePriority, effectiveReasons, reasoning || '(no reasoning)', orders.length)
+  if (stuck) stuckSinceTick = tick   // reset stuck clock after re-evaluation
   hasOrders    = true
   lastCallTick = tick
 }
