@@ -518,7 +518,9 @@ async function connect(): Promise<void> {
 
   const res = await fetch(url)
   if (!res.ok || !res.body) {
-    throw new Error(`SSE connect failed: ${res.status}`)
+    const err = new Error(`SSE connect failed: ${res.status}`) as Error & { status?: number }
+    err.status = res.status
+    throw err
   }
 
   const reader  = res.body.getReader()
@@ -807,6 +809,14 @@ async function run(): Promise<void> {
       await connect()
       console.log('  SSE stream closed — reconnecting in 5s...')
     } catch (err) {
+      const status = (err as { status?: number }).status
+      if (status === 401) {
+        console.log('  Session expired — clearing and rejoining...')
+        clearSession()
+        TOKEN = undefined; SEASON_ID = undefined; NATION_ID = undefined
+        await join()
+        continue
+      }
       console.error('  SSE error:', err)
       console.log('  Reconnecting in 5s...')
     }
