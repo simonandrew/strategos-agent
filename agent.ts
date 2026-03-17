@@ -287,6 +287,7 @@ function buildContext(state: Record<string, unknown>, standingOrders: Order[]): 
   const s = state as {
     economy:            unknown
     standing:           unknown
+    owned_cells:        Array<{ x: number; y: number; terrain: string; army: number; pop_stock: number; pop_max: number; pop_regen: number; connected: boolean }>
     frontier_cells:     Array<{ x: number; y: number; terrain: string; army: number; enemy_army: number; enemy_nation_id: string | null; enemy_nation_name: string | null; expansion_targets: Array<{ x: number; y: number }> }>
     disconnected_cells: unknown
     visible_enemies:    unknown
@@ -325,10 +326,14 @@ function buildContext(state: Record<string, unknown>, standingOrders: Order[]): 
   // Strip expansion_targets from individual frontier cells — it's now at top level
   const frontierStripped = (s.frontier_cells ?? []).map(({ expansion_targets: _, ...rest }) => rest)
 
+  // Sort owned cells by pop_stock desc so the model sees best recruit spots first
+  const ownedSorted = [...(s.owned_cells ?? [])].sort((a, b) => b.pop_stock - a.pop_stock)
+
   parts.push(JSON.stringify({
     economy:                 s.economy,
     standing:                s.standing,
     expansion_targets:       expansionTargets,   // ADVANCE TO THESE — all adjacent unclaimed cells
+    owned_cells:             ownedSorted,        // pop_stock/pop_regen tells you where to recruit
     frontier_cells:          frontierStripped,
     disconnected_cells:      s.disconnected_cells,
     visible_enemies:         s.visible_enemies,
@@ -891,8 +896,13 @@ async function run(): Promise<void> {
         await join()
         continue
       }
-      console.error('  SSE error:', err)
-      console.log('  Reconnecting in 5s...')
+      const cause = (err as { cause?: { code?: string } }).cause
+      if (cause?.code === 'ECONNREFUSED' || (err as { code?: string }).code === 'ECONNREFUSED') {
+        console.log(`  No server found at ${SERVER_URL} — retrying in 5s...`)
+      } else {
+        console.error('  SSE error:', (err as Error).message ?? err)
+        console.log('  Reconnecting in 5s...')
+      }
     }
     await new Promise(r => setTimeout(r, 5000))
   }
