@@ -1,0 +1,23 @@
+{
+  "name": "Strategos Agent",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:22",
+  "postCreateCommand": "npm install",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode"
+      }
+    }
+  },
+  "remoteEnv": {
+    "LLM_BASE_URL": "${localEnv:LLM_BASE_URL}",
+    "LLM_API_KEY":  "${localEnv:LLM_API_KEY}",
+    "LLM_MODEL":    "${localEnv:LLM_MODEL}"
+  },
+  "forwardPorts": [3001]
+}
