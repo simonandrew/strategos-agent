@@ -42,9 +42,9 @@ The grid is made of cells. Each cell has a terrain type and may be owned by a na
 
 You only see:
 - All cells you own (full detail)
-- Enemy cells **directly adjacent** to your territory (army strength only)
+- Enemy cells **within 2 squares** of your territory (army strength only)
 
-You cannot see deep enemy territory, unclaimed cells far from your border, or enemy movements until they reach your frontier.
+You cannot see deep enemy territory, unclaimed cells far from your border, or enemy movements until they approach your frontier.
 
 ---
 
@@ -63,6 +63,43 @@ The state snapshot you receive contains:
 - **pending_proposals** — incoming diplomatic proposals awaiting your response
 - **leaderboard** — all nations ranked by composite score
 - **active_decrees** — directives issued by your engineer (treat as commands)
+
+---
+
+## Tactical map
+
+Each tick you also receive a compact ASCII grid showing your full visible area at a glance.
+
+### Symbols
+
+| Symbol | Meaning |
+|--------|---------|
+| `.`    | Unclaimed land |
+| `r`    | Unclaimed rough |
+| `m`    | Unclaimed mountain |
+| `C`    | Unclaimed city |
+| `~`    | Water (impassable) |
+| `1`–`9` | Your cell — digit is army strength (capped at 9) |
+| `*`    | Your cell — army ≥ 10 |
+| `A`–`Z` | Enemy cell (uppercase letter = nation key from MAP_KEY) |
+| `a`–`z` | NAP ally cell (lowercase letter = same nation key) |
+| `?`    | Fogged cell (outside your visibility range) |
+
+An expansion target that is a city shows `C`; a target with `source_army = 1` (stalled) is still listed in `expansion_targets` with the note.
+
+### MAP_KEY
+
+A compact JSON object accompanies the map, mapping each letter to `{ nation_id, nation_name }`. Use this to cross-reference `visible_enemies`, `active_agreements`, and `pending_proposals`.
+
+### Threat notices
+
+When your situation is urgent, the state snapshot includes one or more of the following notices:
+
+- **`ENEMY CONTACT`** — one or more frontier cells are already under attack (enemy army is adjacent and > 0). React immediately with `attack`, `reinforce`, or `retreat`.
+- **`ENEMY APPROACHING`** — visible enemy cells near your border have significant army (> 2). Consider pre-emptive reinforcement or diplomacy before contact is made.
+- **`ALL ADVANCES STALLED`** — every expansion target has `source_army = 1`. You cannot expand until you `recruit` or `reinforce` to the frontier.
+
+When `ENEMY CONTACT` or `ENEMY APPROACHING` is active you must submit reactive orders — you cannot pass with a no-change response.
 
 ---
 
@@ -226,7 +263,7 @@ Every tick:
 ### Population
 - Each cell has `pop_stock` (current), `pop_max` (capacity), `pop_regen` (recovery per tick)
 - Recruiting draws from `pop_stock`; it recovers each tick up to `pop_max`
-- Core and land cells have high `pop_max`; rough and mountain cells have low `pop_max`
+- City and land cells have high `pop_max`; rough and mountain cells have low `pop_max`
 
 ### Disconnected cells
 Owned cells cut off from your main territory cost 2× upkeep. Either reconnect them (capture the cells in between) or abandon them with `retreat`.
@@ -240,7 +277,7 @@ When army meets army the outcome is probabilistic, weighted by strength and terr
 - Attacking with **2× the defender's army** wins the majority of the time on flat terrain
 - **Rough terrain:** defender needs ~1.5× fewer units to hold
 - **Mountain terrain:** defender needs ~2× fewer units to hold — very hard to take by force
-- **City cells:** strongly fortified — avoid attacking enemy cores unless you have overwhelming force
+- **City cells:** strongly fortified — avoid attacking enemy cities unless you have overwhelming force
 
 There is no guaranteed outcome — randomness is involved. Larger army advantage = higher win probability, not a guarantee.
 
