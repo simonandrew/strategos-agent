@@ -398,7 +398,7 @@ function renderAsciiMap(
 
 // ── State compression ──────────────────────────────────────────────
 
-function buildContext(state: Record<string, unknown>, standingOrders: Order[]): string {
+function buildContext(state: Record<string, unknown>, standingOrders: Order[]): { context: string; threatActive: boolean } {
   const s = state as {
     economy:            unknown
     standing:           unknown
@@ -501,9 +501,34 @@ function buildContext(state: Record<string, unknown>, standingOrders: Order[]): 
     })
     parts.push(
       `ENEMY CONTACT — ${threatenedCells.length} frontier cell(s) facing enemy forces:\n${lines.join('\n')}\n` +
-      `Reinforce or recruit on threatened cells immediately. If badly outnumbered, consider retreat or propose_nap.`
+      `DO NOT use no_change. Reinforce or recruit on threatened cells immediately. If badly outnumbered, retreat or propose_nap.`
     )
   }
+
+  // Approaching threat — enemies visible within 2 squares but not yet adjacent
+  type EnemyEntry = { nation_id: string; nation_name: string; adjacent_cells: Array<{ x: number; y: number; army: number }> }
+  const visibleEnemies = (s.visible_enemies as EnemyEntry[] | undefined) ?? []
+  const adjacentEnemyCoords = new Set(threatenedCells.map((c: FrontierCell) => `${c.enemy_nation_id}`))
+  const approachingLines: string[] = []
+  for (const e of visibleEnemies) {
+    const cells = e.adjacent_cells.filter(c => c.army > 2)
+    if (cells.length === 0) continue
+    const totalArmy = cells.reduce((s, c) => s + c.army, 0)
+    const strongest = cells.reduce((best, c) => c.army > best.army ? c : best, cells[0]!)
+    approachingLines.push(
+      `  ${e.nation_name}: ${cells.length} cell(s) within 2 squares, total army=${totalArmy}, strongest at {x:${strongest.x},y:${strongest.y}} army=${strongest.army}`
+    )
+  }
+  const approachingThreat = approachingLines.length > 0 && threatenedCells.length === 0
+  if (approachingThreat) {
+    parts.push(
+      `ENEMY APPROACHING — enemies visible within 2 squares. Reinforce your facing frontier cells now before they attack.\n` +
+      approachingLines.join('\n') + '\n' +
+      `DO NOT use no_change while enemies are visible. Update orders to reinforce the nearest frontier cells.`
+    )
+  }
+
+  const threatActive = threatenedCells.length > 0 || approachingThreat
 
   parts.push(JSON.stringify({
     economy:                 s.economy,
@@ -518,7 +543,7 @@ function buildContext(state: Record<string, unknown>, standingOrders: Order[]): 
     current_standing_orders: standingOrders,
   }, null, 2))
 
-  return parts.join('\n\n')
+  return { context: parts.join('\n\n'), threatActive }
 }
 
 // ── Tool / function definition ─────────────────────────────────────
@@ -618,15 +643,18 @@ async function decideOrdersToolUse(
   const urgency = priority === 'critical'
     ? '\n⚠️  CRITICAL EVENT — re-evaluate your orders carefully.'
     : ''
+  const ctx = buildContext(state, lastOrders)
   const userMessage = `Your strategy directive (v${strategyVersion}):
 <strategy>
 ${currentStrategy.trim()}
 </strategy>
 
 Current state (tick ${tick}, priority: ${priority}, reasons: ${reasons.join(', ') || 'initial'}):${urgency}
-${buildContext(state, lastOrders)}
+${ctx.context}
 
-Review your current_standing_orders. If they are still correct, set no_change: true — do not resubmit them. Only submit a new orders array if something has changed.`
+${ctx.threatActive
+  ? '⚠️  THREAT ACTIVE — do NOT use no_change. You MUST submit updated orders that address the threat.'
+  : 'Review your current_standing_orders. If they are still correct, set no_change: true — do not resubmit them. Only submit a new orders array if something has changed.'}`
 
   dbg('── LLM request (tool-use) ──────────────────────')
   dbg('system:', SYSTEM_PROMPT)
@@ -652,6 +680,10 @@ Review your current_standing_orders. If they are still correct, set no_change: t
   const input = JSON.parse(toolCall.function.arguments) as { orders?: Order[]; reasoning?: string; no_change?: boolean }
   const reasoning = input.reasoning ?? ''
   if (reasoning) console.log(`  reasoning: ${reasoning}`)
+  if (input.no_change && ctx.threatActive) {
+    console.warn(`  [warn] LLM said no_change during active threat — overriding, keeping last orders`)
+    return { orders: lastOrders, reasoning, noChange: false }
+  }
   if (input.no_change) return { orders: [], reasoning, noChange: true }
   return { orders: input.orders ?? [], reasoning, noChange: false }
 }
@@ -668,15 +700,16 @@ async function decideOrdersJsonMode(
   const urgency = priority === 'critical'
     ? '\n⚠️  CRITICAL EVENT — re-evaluate your orders carefully.'
     : ''
+  const ctx = buildContext(state, lastOrders)
   const userMessage = `Your strategy directive (v${strategyVersion}):
 <strategy>
 ${currentStrategy.trim()}
 </strategy>
 
 Current state (tick ${tick}, priority: ${priority}, reasons: ${reasons.join(', ') || 'initial'}):${urgency}
-${buildContext(state, lastOrders)}
+${ctx.context}
 
-Review your current_standing_orders and respond with a JSON object in exactly this format:
+${ctx.threatActive ? '⚠️  THREAT ACTIVE — do NOT use no_change. You MUST submit updated orders that address the threat.\n\n' : ''}Review your current_standing_orders and respond with a JSON object in exactly this format:
 {
   "reasoning": "one sentence explaining your main decision",
   "orders": [ ...orders array... ]
@@ -713,6 +746,10 @@ Order types and fields:
   const input = JSON.parse(text) as { orders?: Order[]; reasoning?: string; no_change?: boolean }
   const reasoning = input.reasoning ?? ''
   if (reasoning) console.log(`  reasoning: ${reasoning}`)
+  if (input.no_change && ctx.threatActive) {
+    console.warn(`  [warn] LLM said no_change during active threat — overriding, keeping last orders`)
+    return { orders: lastOrders, reasoning, noChange: false }
+  }
   if (input.no_change) return { orders: [], reasoning, noChange: true }
   return { orders: input.orders ?? [], reasoning, noChange: false }
 }
