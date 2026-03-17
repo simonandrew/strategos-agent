@@ -684,6 +684,18 @@ const mgmtServer = createServer(async (req: IncomingMessage, res: ServerResponse
 
 // ── Main ───────────────────────────────────────────────────────────
 
+let mgmtPortActual = MGMT_PORT
+
+mgmtServer.on('error', (err: NodeJS.ErrnoException) => {
+  if (err.code === 'EADDRINUSE') {
+    mgmtPortActual++
+    console.warn(`  Mgmt port in use — trying ${mgmtPortActual}`)
+    mgmtServer.listen(mgmtPortActual)
+  } else {
+    throw err
+  }
+})
+
 mgmtServer.listen(MGMT_PORT, () => {
   const providerLabel = LLM_BASE_URL.includes('anthropic') ? 'Anthropic'
     : LLM_BASE_URL.includes('openai')   ? 'OpenAI'
@@ -704,13 +716,13 @@ mgmtServer.listen(MGMT_PORT, () => {
   Strategy  → ${strategyFile}  (edit and save to update live)
   Server    → ${SERVER_URL}
 ${sessionInfo}
-  Mgmt API  → http://localhost:${MGMT_PORT}
+  Mgmt API  → http://localhost:${mgmtPortActual}
 
   Update strategy:
-    curl -X PUT http://localhost:${MGMT_PORT}/strategy -d "your new strategy"
+    curl -X PUT http://localhost:${mgmtPortActual}/strategy -d "your new strategy"
 
   Issue a decree:
-    curl -X POST http://localhost:${MGMT_PORT}/decree \\
+    curl -X POST http://localhost:${mgmtPortActual}/decree \\
       -H "Content-Type: application/json" \\
       -d '{"text":"Attack the Tyrant — they are isolated"}'
 `)
