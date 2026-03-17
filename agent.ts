@@ -539,7 +539,7 @@ let lastTick       = 0
 let lastState:     Record<string, unknown> = {}
 let lastTerritory  = 0
 let stuckSinceTick = 0
-const STUCK_TICKS  = 5   // force re-evaluation if territory unchanged for this many ticks
+const STUCK_TICKS  = 2   // force re-evaluation if territory unchanged for this many ticks
 
 async function connect(): Promise<void> {
   const url = `${SERVER_URL}/v1/stream?season_id=${SEASON_ID!}&token=${TOKEN!}`
@@ -639,9 +639,10 @@ async function handleEvent(type: string, data: string): Promise<void> {
     return
   }
 
-  // Throttle: skip notable events within MIN_TICKS window (critical/stuck always fires)
+  // Throttle: skip notable events within MIN_TICKS window (critical/stuck/territory always fires)
   const ticksSinceLast = tick - lastCallTick
-  if (priority !== 'critical' && !stuck && hasOrders && ticksSinceLast < MIN_TICKS_BETWEEN_CALLS) {
+  const territoryChanged = reasons.includes('territory_gained') || reasons.includes('territory_lost')
+  if (priority !== 'critical' && !stuck && !territoryChanged && hasOrders && ticksSinceLast < MIN_TICKS_BETWEEN_CALLS) {
     console.log(`  throttled (${ticksSinceLast}/${MIN_TICKS_BETWEEN_CALLS} ticks since last call)`)
     return
   }
