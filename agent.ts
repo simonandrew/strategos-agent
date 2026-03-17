@@ -251,33 +251,32 @@ function loadStrategy(): string {
   if (!existsSync(strategyFile)) {
     const defaultStrategy = `# My Strategos
 
-## What the engine handles automatically (you do NOT need to order these):
-- Recruiting max on all city and land cells every tick
-- Advancing to all expansion targets every tick (city cells first)
+## Every tick, submit orders for ALL of the following:
 
-## What YOU must decide each call:
+1. RECRUIT — on every owned cell with pop_stock >= 5, recruit floor(pop_stock/5) units.
+   Prioritise city cells (highest income), then land cells. Never under-recruit.
+   Stop recruiting if deficit_stage >= 2.
 
-1. REINFORCE — push army from high-army interior cells to stalled frontier source cells.
-   - Check expansion_targets for source_army=1 (advance stalled). The source_cell is where army needs to go.
-   - Find owned_cells with army > 3 and reinforce from them to stalled source cells.
-   - This is free and fast — always do it when stalls exist.
+2. ADVANCE — submit advance for EVERY cell in expansion_targets. All of them.
+   Prioritise city terrain ('city' in expansion_targets) — it has the best income.
+   Expand in all directions simultaneously — a blob beats a line.
 
-2. DEFEND — check ENEMY CONTACT and ENEMY APPROACHING blocks.
-   - Reinforce threatened frontier cells to match or exceed enemy army.
-   - If badly outnumbered (enemy 3x+): propose_nap to buy time.
-   - Retreat cells you cannot hold to save the army.
+3. REINFORCE — if expansion_targets has source_army=1 (stalled), reinforce from a
+   high-army owned cell to that target's source_cell. reinforce is free.
+   Only works if the source cell has army > 1 — recruit first if all cells are at army=1.
 
-3. ATTACK — when your frontier army >= 1.5x an adjacent enemy cell's army, attack.
-   - Target the weakest enemy nation on the leaderboard.
-   - Never attack a nation you have a NAP with.
+4. DEFEND — check ENEMY CONTACT / ENEMY APPROACHING blocks.
+   Reinforce threatened frontier cells to match or exceed enemy army.
+   If overwhelmed (enemy 3x+): propose_nap to buy time. Retreat cells you can't hold.
 
-4. DIPLOMACY — propose NAPs to stable neighbours while you build strength.
-   Accept proposals from nations you're not ready to fight.
+5. ATTACK — when frontier army >= 1.5x an adjacent enemy cell, attack.
+   Target the weakest nation on the leaderboard. Never attack a NAP partner.
 
 ## Key rules:
-- Never let deficit_stage reach 3 — it causes rapid army loss. If stage 2, hold and let income recover.
-- Disconnected cells cost 2x upkeep — reconnect or retreat them.
-- A compact blob of territory beats a thin line — reinforce the interior to enable all-direction expansion.
+- Always cover every expansion_target with an advance order every call.
+- City cells first — they give the best income and army regeneration.
+- Never let deficit_stage reach 3. At stage 2, stop recruiting.
+- Disconnected cells cost 2x upkeep — reconnect or retreat them quickly.
 `
     writeFileSync(strategyFile, defaultStrategy, 'utf-8')
     console.log(`  Created default strategy at ${strategyFile}`)
@@ -845,71 +844,6 @@ async function connect(): Promise<void> {
   }
 }
 
-// ── Mechanical layer ───────────────────────────────────────────────
-// Runs every tick without LLM. Keeps advance orders current and
-// recruits max on city cells so the engine always has fresh targets.
-
-let lastMechKey = ''  // fingerprint to avoid redundant PUTs
-
-async function runMechanicalOrders(state: Record<string, unknown>): Promise<void> {
-  type FrontierCell = {
-    expansion_targets: Array<{ x: number; y: number; terrain: string }>
-  }
-  type OwnedCell = { x: number; y: number; terrain: string; army: number; pop_stock: number; pop_regen: number }
-  type EconomyState = { deficit_stage?: number }
-
-  const frontierCells = (state.frontier_cells as FrontierCell[] | undefined) ?? []
-  const ownedCells    = (state.owned_cells    as OwnedCell[]    | undefined) ?? []
-  const economy       = (state.economy        as EconomyState   | undefined) ?? {}
-
-  // Collect all expansion targets, city terrain first
-  const seen = new Set<string>()
-  const advances: Order[] = []
-  const terrainPriority = (t: string) => t === 'city' ? 0 : t === 'land' ? 1 : 2
-  const allTargets = frontierCells.flatMap(fc => fc.expansion_targets ?? [])
-  allTargets.sort((a, b) => terrainPriority(a.terrain) - terrainPriority(b.terrain))
-  for (const t of allTargets) {
-    const k = `${t.x},${t.y}`
-    if (seen.has(k)) continue
-    seen.add(k)
-    advances.push({ type: 'advance', to: { x: t.x, y: t.y } } as Order)
-  }
-
-  // Recruit max on city cells (best income return), then other high-pop cells
-  // Skip recruiting if deficit_stage >= 2 to avoid worsening attrition
-  const recruits: Order[] = []
-  if ((economy.deficit_stage ?? 0) < 2) {
-    const recruitCells = [...ownedCells]
-      .filter(c => c.pop_regen > 0 && c.pop_stock >= 5)
-      .sort((a, b) => {
-        const ta = a.terrain === 'city' ? 0 : 1
-        const tb = b.terrain === 'city' ? 0 : 1
-        return ta - tb || b.pop_stock - a.pop_stock
-      })
-    for (const c of recruitCells) {
-      const amount = Math.floor(c.pop_stock / 5)
-      if (amount > 0) recruits.push({ type: 'recruit', at: { x: c.x, y: c.y }, amount } as Order)
-    }
-  }
-
-  // Merge with LLM orders: keep LLM reinforce/attack/diplomacy, replace advances+recruits
-  const llmStrategicOrders = lastOrders.filter(
-    o => o.type !== 'advance' && o.type !== 'recruit'
-  )
-  const mechOrders = [...recruits, ...advances, ...llmStrategicOrders]
-
-  // Only PUT if orders changed
-  const key = JSON.stringify(mechOrders)
-  if (key === lastMechKey) return
-  lastMechKey = key
-
-  if (mechOrders.length > 0) {
-    dbg(`[mech] submitting ${advances.length} advances, ${recruits.length} recruits`)
-    await putOrders(mechOrders)
-    hasOrders = true
-  }
-}
-
 async function handleEvent(type: string, data: string): Promise<void> {
   if (type === 'heartbeat') return
 
@@ -963,13 +897,18 @@ async function handleEvent(type: string, data: string): Promise<void> {
     `${priority} [${reasons.join(', ')}]${stuck ? ' [stuck]' : ''}`,
   )
 
-  // ── Mechanical layer (runs every tick, no LLM) ────────────────────
-  // Advance all current expansion targets + recruit max on city cells.
-  // This runs regardless of significance so new targets are never missed.
-  await runMechanicalOrders(state)
+  // Check for uncovered expansion targets — new cells adjacent since last LLM call
+  const currentAdvanceTargets = new Set(
+    lastOrders.filter(o => o.type === 'advance').map(o => `${(o as {to:{x:number,y:number}}).to.x},${(o as {to:{x:number,y:number}}).to.y}`)
+  )
+  const frontierCells = (state.frontier_cells as Array<{expansion_targets: Array<{x:number,y:number}>}> | undefined) ?? []
+  const hasUncoveredTargets = frontierCells.some(fc =>
+    (fc.expansion_targets ?? []).some(t => !currentAdvanceTargets.has(`${t.x},${t.y}`))
+  )
+  if (hasUncoveredTargets) reasons.push('new_expansion_targets')
 
-  // Skip LLM if: not significant, not stuck, and already have orders
-  if (!significant && !stuck && hasOrders) {
+  // Skip LLM if: not significant, not stuck, no new targets, and already have orders
+  if (!significant && !stuck && !hasUncoveredTargets && hasOrders) {
     dbg(`skip tick=${tick} (routine, hasOrders)`)
     return
   }
