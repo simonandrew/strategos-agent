@@ -654,7 +654,7 @@ async function handleEvent(type: string, data: string): Promise<void> {
     `  tick=${String(tick).padStart(4)} | ` +
     `territory=${territory} | ` +
     `army=${economy?.army ?? '?'} | ` +
-    `surplus=${economy?.surplus !== undefined ? (economy.surplus >= 0 ? '+' : '') + economy.surplus.toFixed(2) : '?'} | ` +
+    `surplus=${economy?.surplus != null ? (economy.surplus >= 0 ? '+' : '') + economy.surplus.toFixed(2) : '?'} | ` +
     `${priority} [${reasons.join(', ')}]${stuck ? ' [stuck]' : ''}`,
   )
 
