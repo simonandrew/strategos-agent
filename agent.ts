@@ -115,8 +115,6 @@ const LLM_MODEL    = process.env.LLM_MODEL    ?? arg('--model') ?? 'gpt-4o-mini'
 // Set LLM_JSON_MODE=true to use JSON output mode instead.
 const JSON_MODE = process.env.LLM_JSON_MODE === 'true'
 
-// Minimum ticks between LLM calls (critical events always bypass).
-const MIN_TICKS_BETWEEN_CALLS = parseInt(process.env.LLM_MIN_TICKS ?? '1', 10)
 
 const client = new OpenAI({
   baseURL: LLM_BASE_URL,
@@ -797,13 +795,9 @@ async function putOrders(orders: Order[]): Promise<void> {
 
 // ── SSE connection ─────────────────────────────────────────────────
 
-let hasOrders      = false
-let lastCallTick   = -999
-let lastTick       = 0
-let lastState:     Record<string, unknown> = {}
-let lastTerritory  = 0
-let stuckSinceTick = 0
-const STUCK_TICKS  = 2   // force re-evaluation if territory unchanged for this many ticks
+let lastCallTick = -999
+let lastTick     = 0
+let lastState:   Record<string, unknown> = {}
 
 async function connect(): Promise<void> {
   const url = `${SERVER_URL}/v1/stream?season_id=${SEASON_ID!}&token=${TOKEN!}`
@@ -875,65 +869,27 @@ async function handleEvent(type: string, data: string): Promise<void> {
     return
   }
 
-  const { tick, significant, priority = 'notable', reasons, state } = payload
+  const { tick, priority = 'notable', reasons, state } = payload
   lastTick  = tick
   lastState = state
   const standing = state.standing as { territory?: number; rank?: number } | undefined
   const economy  = state.economy  as { army?: number; surplus?: number }   | undefined
-
-  // Stuck detection: force re-evaluation if territory hasn't grown
   const territory = standing?.territory ?? 0
-  if (territory > lastTerritory) {
-    lastTerritory  = territory
-    stuckSinceTick = tick
-  }
-  const stuck = hasOrders && (tick - stuckSinceTick) >= STUCK_TICKS
 
   console.log(
     `  tick=${String(tick).padStart(4)} | ` +
     `territory=${territory} | ` +
     `army=${economy?.army ?? '?'} | ` +
     `surplus=${economy?.surplus != null ? (economy.surplus >= 0 ? '+' : '') + economy.surplus.toFixed(2) : '?'} | ` +
-    `${priority} [${reasons.join(', ')}]${stuck ? ' [stuck]' : ''}`,
+    `${priority} [${reasons.join(', ')}]`,
   )
-
-  // Check for uncovered expansion targets — new cells adjacent since last LLM call
-  const currentAdvanceTargets = new Set(
-    lastOrders.filter(o => o.type === 'advance').map(o => `${(o as {to:{x:number,y:number}}).to.x},${(o as {to:{x:number,y:number}}).to.y}`)
-  )
-  const frontierCells = (state.frontier_cells as Array<{expansion_targets: Array<{x:number,y:number}>}> | undefined) ?? []
-  const hasUncoveredTargets = frontierCells.some(fc =>
-    (fc.expansion_targets ?? []).some(t => !currentAdvanceTargets.has(`${t.x},${t.y}`))
-  )
-  if (hasUncoveredTargets) reasons.push('new_expansion_targets')
-
-  // Skip LLM if: not significant, not stuck, no new targets, and already have orders
-  if (!significant && !stuck && !hasUncoveredTargets && hasOrders) {
-    dbg(`skip tick=${tick} (routine, hasOrders)`)
-    return
-  }
-
-  // Throttle: skip notable events within MIN_TICKS window (critical/stuck/territory always fires)
-  const ticksSinceLast = tick - lastCallTick
-  const territoryChanged = reasons.includes('territory_gained') || reasons.includes('territory_lost')
-  if (priority !== 'critical' && !stuck && !territoryChanged && hasOrders && ticksSinceLast < MIN_TICKS_BETWEEN_CALLS) {
-    console.log(`  throttled (${ticksSinceLast}/${MIN_TICKS_BETWEEN_CALLS} ticks since last call)`)
-    return
-  }
-
-  dbg('── state snapshot ──────────────────────────────')
-  dbg('frontier_cells:', JSON.stringify((state as Record<string, unknown>).frontier_cells, null, 2))
-  dbg('standing_orders:', JSON.stringify(lastOrders, null, 2))
-
-  const effectivePriority = stuck ? 'critical' : priority
-  const effectiveReasons  = stuck ? [...reasons, 'stuck'] : reasons
 
   const t0 = Date.now()
   let orders: Order[] = []
   let reasoning = ''
   let noChange = false
   try {
-    ;({ orders, reasoning, noChange } = await decideOrders(tick, state, effectiveReasons, effectivePriority, lastOrders))
+    ;({ orders, reasoning, noChange } = await decideOrders(tick, state, reasons, priority, lastOrders))
   } catch (err) {
     console.error(`  [tick ${tick}] LLM error:`, err)
     return
@@ -946,9 +902,8 @@ async function handleEvent(type: string, data: string): Promise<void> {
     console.log(`  orders=${orders.length} | ${ms}ms`)
     await putOrders(orders)
   }
-  appendGameLog(tick, effectivePriority, effectiveReasons, reasoning || '(no reasoning)', noChange ? -1 : orders.length)
-  if (stuck) stuckSinceTick = tick   // reset stuck clock after re-evaluation
-  hasOrders    = true
+  appendGameLog(tick, priority, reasons, reasoning || '(no reasoning)', noChange ? -1 : orders.length)
+  
   lastCallTick = tick
 }
 
@@ -1084,7 +1039,7 @@ rl.on('line', async (line) => {
       await putOrders(orders)
     }
     appendGameLog(lastTick, 'critical', ['decree_issued'], reasoning || '(no reasoning)', noChange ? -1 : orders.length)
-    hasOrders    = true
+    
     lastCallTick = lastTick
   } catch (err) {
     console.error('  decree error:', err)
