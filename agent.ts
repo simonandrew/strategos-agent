@@ -285,6 +285,99 @@ watch(strategyFile, () => {
   } catch { /* file may be mid-write */ }
 })
 
+// ── ASCII map renderer ─────────────────────────────────────────────
+
+function renderAsciiMap(
+  state:            Record<string, unknown>,
+  nationId:         string,
+  expansionTargets: Array<{ x: number; y: number }>,
+): string {
+  type OwnedCell    = { x: number; y: number; terrain: string; army: number }
+  type EnemyEntry   = { nation_id: string; nation_name: string; adjacent_cells: Array<{ x: number; y: number; army: number }> }
+  type Agreement    = { type: string; with_nation_id: string }
+  type LBEntry      = { nation_id: string; nation_name: string; rank: number }
+
+  const ownedCells       = (state.owned_cells       as OwnedCell[]  ) ?? []
+  const visibleEnemies   = (state.visible_enemies   as EnemyEntry[] ) ?? []
+  const activeAgreements = (state.active_agreements as Agreement[]  ) ?? []
+  const leaderboard      = (state.leaderboard       as LBEntry[]    ) ?? []
+
+  // NAP partners
+  const napIds = new Set(activeAgreements.filter(a => a.type === 'nap').map(a => a.with_nation_id))
+
+  // Stable letter assignment by leaderboard rank order (excludes self)
+  const others = leaderboard.filter(n => n.nation_id !== nationId)
+  const nationSym = new Map<string, string>()
+  others.forEach((n, i) => {
+    if (i >= 26) return
+    const letter = String.fromCharCode(65 + i)                  // A-Z
+    nationSym.set(n.nation_id, napIds.has(n.nation_id) ? letter.toLowerCase() : letter)
+  })
+
+  // Build cell map: "x,y" -> display char
+  const grid = new Map<string, string>()
+
+  // Expansion targets — unclaimed cells adjacent to our frontier
+  for (const t of expansionTargets) grid.set(`${t.x},${t.y}`, '.')
+
+  // Visible enemy cells
+  for (const e of visibleEnemies) {
+    const sym = nationSym.get(e.nation_id) ?? '?'
+    for (const c of (e.adjacent_cells ?? [])) grid.set(`${c.x},${c.y}`, sym)
+  }
+
+  // Own cells (rendered last — overwrites enemy/expansion overlaps if any)
+  for (const c of ownedCells) {
+    if (c.terrain === 'core') { grid.set(`${c.x},${c.y}`, 'C'); continue }
+    if (c.terrain === 'water') { grid.set(`${c.x},${c.y}`, '~'); continue }
+    const a = Math.max(0, Math.min(9, Math.round(c.army)))
+    grid.set(`${c.x},${c.y}`, a > 0 ? String(a) : '#')
+  }
+
+  if (grid.size === 0) return ''
+
+  // Bounding box
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+  for (const k of grid.keys()) {
+    const [xs, ys] = k.split(',')
+    const x = parseInt(xs!), y = parseInt(ys!)
+    if (x < minX) minX = x; if (x > maxX) maxX = x
+    if (y < minY) minY = y; if (y > maxY) maxY = y
+  }
+  minX = Math.max(0, minX - 1); minY = Math.max(0, minY - 1)
+  maxX += 1; maxY += 1
+
+  // Render — two-row column header for x coordinate readability
+  const lines: string[] = []
+  const pad = '     '
+  let h1 = pad, h2 = pad
+  for (let x = minX; x <= maxX; x++) {
+    h1 += x % 10 === 0 ? String(Math.floor(x / 10) % 10) : ' '
+    h2 += String(x % 10)
+  }
+  lines.push(h1, h2)
+  for (let y = minY; y <= maxY; y++) {
+    let row = String(y).padStart(4) + ' '
+    for (let x = minX; x <= maxX; x++) row += grid.get(`${x},${y}`) ?? ' '
+    lines.push(row)
+  }
+
+  // Compact key — machine-readable, includes nation IDs for direct use in orders
+  type KeyEntry = { sym: string; id: string; name: string; rel: 'nap' | 'hostile'; rank: number }
+  const keyEntries: KeyEntry[] = others.flatMap(n => {
+    const sym = nationSym.get(n.nation_id)
+    if (!sym) return []
+    return [{ sym, id: n.nation_id, name: n.nation_name, rel: napIds.has(n.nation_id) ? 'nap' : 'hostile', rank: n.rank }]
+  })
+
+  return [
+    'TACTICAL MAP (fog of war active):',
+    lines.join('\n'),
+    'Legend: C=your core  1-9=your cells (army strength)  .=unclaimed expansion target  UPPER=hostile  lower=NAP ally  (space)=unknown/fogged',
+    `MAP_KEY:${JSON.stringify(keyEntries)}`,
+  ].join('\n')
+}
+
 // ── State compression ──────────────────────────────────────────────
 
 function buildContext(state: Record<string, unknown>, standingOrders: Order[]): string {
@@ -341,6 +434,11 @@ function buildContext(state: Record<string, unknown>, standingOrders: Order[]): 
       expansionTargets.push({ x: t.x, y: t.y, source_army: sourceArmy })
     }
   }
+
+  // ASCII map — spatial overview for the LLM
+  const nationId = (state.nation_id as string | undefined) ?? ''
+  const asciiMap = renderAsciiMap(state, nationId, expansionTargets)
+  if (asciiMap) parts.push(asciiMap)
 
   // Strip expansion_targets from individual frontier cells — it's now at top level
   const frontierStripped = (s.frontier_cells ?? []).map(({ expansion_targets: _, ...rest }) => rest)
@@ -453,7 +551,7 @@ async function decideOrdersToolUse(
   reasons: string[],
   priority: string,
   lastOrders: Order[],
-): Promise<{ orders: Order[]; reasoning: string }> {
+): Promise<{ orders: Order[]; reasoning: string; noChange: boolean }> {
   const urgency = priority === 'critical'
     ? '\n⚠️  CRITICAL EVENT — re-evaluate your orders carefully.'
     : ''
@@ -503,7 +601,7 @@ async function decideOrdersJsonMode(
   reasons: string[],
   priority: string,
   lastOrders: Order[],
-): Promise<{ orders: Order[]; reasoning: string }> {
+): Promise<{ orders: Order[]; reasoning: string; noChange: boolean }> {
   const urgency = priority === 'critical'
     ? '\n⚠️  CRITICAL EVENT — re-evaluate your orders carefully.'
     : ''
