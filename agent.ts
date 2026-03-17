@@ -304,6 +304,13 @@ function buildContext(state: Record<string, unknown>, standingOrders: Order[]): 
   const log = gameLogContext()
   if (log) parts.push(log)
 
+  // Decrees shown prominently above the state JSON — they are commands, not metadata
+  const decrees = s.active_decrees as Array<{ decree_id: string; issued_at_tick: number; text: string }> | undefined
+  if (decrees && decrees.length > 0) {
+    const lines = decrees.map(d => `  [tick ${d.issued_at_tick}] ${d.text}`)
+    parts.push(`ACTIVE DECREES — implement these immediately, they override your strategy:\n${lines.join('\n')}`)
+  }
+
   parts.push(JSON.stringify({
     economy:                 s.economy,
     standing:                s.standing,
@@ -312,7 +319,6 @@ function buildContext(state: Record<string, unknown>, standingOrders: Order[]): 
     visible_enemies:         s.visible_enemies,
     active_agreements:       s.active_agreements,
     leaderboard:             s.leaderboard,
-    active_decrees:          s.active_decrees,
     current_standing_orders: standingOrders,
   }, null, 2))
 
@@ -382,7 +388,9 @@ RULES:
   - Attacking with more army increases your chance of winning
   - Never attack a nation you have an active agreement with (breaks pact, damages reputation)
 
-You will be given a strategy directive written by your engineer. Follow it faithfully.`
+You will be given a strategy directive written by your engineer. Follow it faithfully.
+
+If ACTIVE DECREES are present, treat them as direct commands from your engineer that OVERRIDE the strategy. Implement them in full in your next order submission.`
 
 // ── LLM call — tool use mode ───────────────────────────────────────
 
