@@ -351,17 +351,21 @@ const SUBMIT_ORDERS_TOOL: OpenAI.ChatCompletionTool = {
   type: 'function',
   function: {
     name: 'submit_orders',
-    description: 'Submit your standing orders for this and future ticks.',
+    description: 'Submit updated standing orders, or set no_change: true to keep existing orders unchanged.',
     parameters: {
       type: 'object',
       properties: {
         reasoning: {
           type: 'string',
-          description: 'One sentence explaining your main decision this tick.',
+          description: 'One sentence explaining your decision.',
+        },
+        no_change: {
+          type: 'boolean',
+          description: 'Set to true if your current standing orders are still correct and need no update. Skips the PUT entirely — saves tokens and server load.',
         },
         orders: {
           type: 'array',
-          description: 'Orders to execute. All coordinates are {x, y} grid positions.',
+          description: 'New standing orders. Omit (or leave empty) when no_change is true.',
           items: {
             type: 'object',
             properties: {
@@ -376,16 +380,16 @@ const SUBMIT_ORDERS_TOOL: OpenAI.ChatCompletionTool = {
           },
         },
       },
-      required: ['orders'],
+      required: ['reasoning'],
     },
   },
 }
 
 const SYSTEM_PROMPT = `You are a military Strategos — an AI general controlling a nation in a real-time territorial strategy simulation called Strategos.
 
-Each significant tick you receive a JSON state snapshot of your nation. Your current standing orders are included — review them and update only if the situation warrants it.
+Each significant tick you receive a JSON state snapshot of your nation. Your current standing orders are included — review them and decide whether to update or keep them.
 
-Standing orders persist until you replace them. If your current orders are still appropriate, submit them unchanged. Only update when something meaningful has changed.
+Standing orders persist until you replace them. Set no_change: true if your current orders are still correct — do NOT resubmit them unchanged, that wastes tokens. Only submit a new orders array when something has actually changed.
 
 ORDER TYPES:
   advance   { type, to: {x,y}, units }                 — PREFERRED for expansion: engine picks your strongest adjacent cell and moves in (if unoccupied) or attacks (if enemy). Retries each tick until you own the target.
@@ -432,7 +436,7 @@ ${currentStrategy.trim()}
 Current state (tick ${tick}, priority: ${priority}, reasons: ${reasons.join(', ') || 'initial'}):${urgency}
 ${buildContext(state, lastOrders)}
 
-Review your current_standing_orders and submit updated orders (or resubmit unchanged if still appropriate).`
+Review your current_standing_orders. If they are still correct, set no_change: true — do not resubmit them. Only submit a new orders array if something has changed.`
 
   dbg('── LLM request (tool-use) ──────────────────────')
   dbg('system:', SYSTEM_PROMPT)
@@ -453,12 +457,13 @@ Review your current_standing_orders and submit updated orders (or resubmit uncha
   dbg(JSON.stringify(response.choices[0]?.message, null, 2))
 
   const toolCall = response.choices[0]?.message?.tool_calls?.[0]
-  if (!toolCall || toolCall.type !== 'function') return { orders: [], reasoning: '' }
+  if (!toolCall || toolCall.type !== 'function') return { orders: [], reasoning: '', noChange: false }
 
-  const input = JSON.parse(toolCall.function.arguments) as { orders?: Order[]; reasoning?: string }
+  const input = JSON.parse(toolCall.function.arguments) as { orders?: Order[]; reasoning?: string; no_change?: boolean }
   const reasoning = input.reasoning ?? ''
   if (reasoning) console.log(`  reasoning: ${reasoning}`)
-  return { orders: input.orders ?? [], reasoning }
+  if (input.no_change) return { orders: [], reasoning, noChange: true }
+  return { orders: input.orders ?? [], reasoning, noChange: false }
 }
 
 // ── LLM call — JSON mode (fallback for providers without tool use) ──
@@ -515,10 +520,11 @@ Order types and fields:
   dbg(response.choices[0]?.message?.content)
 
   const text = response.choices[0]?.message?.content ?? '{}'
-  const input = JSON.parse(text) as { orders?: Order[]; reasoning?: string }
+  const input = JSON.parse(text) as { orders?: Order[]; reasoning?: string; no_change?: boolean }
   const reasoning = input.reasoning ?? ''
   if (reasoning) console.log(`  reasoning: ${reasoning}`)
-  return { orders: input.orders ?? [], reasoning }
+  if (input.no_change) return { orders: [], reasoning, noChange: true }
+  return { orders: input.orders ?? [], reasoning, noChange: false }
 }
 
 async function decideOrders(
@@ -527,7 +533,7 @@ async function decideOrders(
   reasons: string[],
   priority: string,
   lastOrders: Order[],
-): Promise<{ orders: Order[]; reasoning: string }> {
+): Promise<{ orders: Order[]; reasoning: string; noChange: boolean }> {
   return JSON_MODE
     ? decideOrdersJsonMode(tick, state, reasons, priority, lastOrders)
     : decideOrdersToolUse(tick, state, reasons, priority, lastOrders)
@@ -687,18 +693,22 @@ async function handleEvent(type: string, data: string): Promise<void> {
   const t0 = Date.now()
   let orders: Order[] = []
   let reasoning = ''
+  let noChange = false
   try {
-    ;({ orders, reasoning } = await decideOrders(tick, state, effectiveReasons, effectivePriority, lastOrders))
+    ;({ orders, reasoning, noChange } = await decideOrders(tick, state, effectiveReasons, effectivePriority, lastOrders))
   } catch (err) {
     console.error(`  [tick ${tick}] LLM error:`, err)
     return
   }
 
   const ms = Date.now() - t0
-  console.log(`  orders=${orders.length} | ${ms}ms`)
-
-  await putOrders(orders)
-  appendGameLog(tick, effectivePriority, effectiveReasons, reasoning || '(no reasoning)', orders.length)
+  if (noChange) {
+    console.log(`  no_change | ${ms}ms`)
+  } else {
+    console.log(`  orders=${orders.length} | ${ms}ms`)
+    await putOrders(orders)
+  }
+  appendGameLog(tick, effectivePriority, effectiveReasons, reasoning || '(no reasoning)', noChange ? -1 : orders.length)
   if (stuck) stuckSinceTick = tick   // reset stuck clock after re-evaluation
   hasOrders    = true
   lastCallTick = tick
@@ -828,10 +838,14 @@ rl.on('line', async (line) => {
     // Immediately call LLM with cached state, bypassing throttle
     if (Object.keys(lastState).length === 0) return
     const t0 = Date.now()
-    const { orders, reasoning } = await decideOrders(lastTick, lastState, ['decree_issued'], 'critical', lastOrders)
-    console.log(`  orders=${orders.length} | ${Date.now() - t0}ms`)
-    await putOrders(orders)
-    appendGameLog(lastTick, 'critical', ['decree_issued'], reasoning || '(no reasoning)', orders.length)
+    const { orders, reasoning, noChange } = await decideOrders(lastTick, lastState, ['decree_issued'], 'critical', lastOrders)
+    if (noChange) {
+      console.log(`  no_change | ${Date.now() - t0}ms`)
+    } else {
+      console.log(`  orders=${orders.length} | ${Date.now() - t0}ms`)
+      await putOrders(orders)
+    }
+    appendGameLog(lastTick, 'critical', ['decree_issued'], reasoning || '(no reasoning)', noChange ? -1 : orders.length)
     hasOrders    = true
     lastCallTick = lastTick
   } catch (err) {
