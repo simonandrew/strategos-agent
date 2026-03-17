@@ -251,19 +251,27 @@ function loadStrategy(): string {
   if (!existsSync(strategyFile)) {
     const defaultStrategy = `# My Strategos
 
-Expansion always comes first. Submit advance orders to every coordinate in the expansion_targets list every tick. Never hold at 1 territory — expanding is the only way to grow income.
+## Every tick, in order:
 
-If territory < 10: expand aggressively. Accept some deficit temporarily — more cells = more income.
-After each expansion wave, check expansion_targets for source_army=1 entries — those advances are stalled. Fix stalls two ways:
-1. Reinforce: use reinforce orders to push army from interior cells (army > 5) toward the stalled frontier cell. This is fast.
-2. Recruit: recruit on the stalled source cell if it has population. Recruit at interior cells only if they are adjacent to a stalled frontier cell.
-Always prefer reinforce over recruit if you have idle interior army — it's free.
+1. RECRUIT — on every owned cell where pop_stock >= 10, recruit floor(pop_stock/5) units.
+   Maximise recruitment. More army = faster expansion = more income. Don't recruit just 1 or 2 — recruit the maximum the population allows.
 
-If territory >= 10: consolidate before attacking further. Recruit at high-population cells. Only attack when frontier army >= 1.5x the enemy's.
+2. ADVANCE — submit an advance order for EVERY cell in expansion_targets. All of them, every tick.
+   Expand in all 4 directions simultaneously — do not focus on one direction or you will form a thin line which is weak and low-income.
+   Prefer land terrain (shown as 'l') over rough ('r') or mountain ('m') — land has the best income.
 
-In deficit with territory >= 10: stop recruiting, retreat from isolated cells, hold the core.
+3. REINFORCE — if any expansion_target has source_army=1, use reinforce to push army from a high-army interior cell to that target's source_cell.
+   reinforce is free. Always prefer reinforce over recruit to unblock stalled advances if interior army > 1 exists.
 
-Target the weakest nation on the leaderboard. Respect NAPs — never attack an ally.
+## Key rules:
+
+- Expand as a compact blob, not a line. A blob has short borders and high income. A line has long exposed borders and bleeds army.
+- After recruiting, army is available the same tick — submit recruits and advances together.
+- Never let all cells sit at army=1. Always have some cells with army > 3 to reinforce from.
+- Watch surplus — if deficit_stage reaches 2, stop recruiting and let income recover.
+- Attack enemies only when your frontier army is >= 1.5x the enemy cell's army.
+- Never attack a nation you have an active NAP agreement with.
+- Target the weakest nation on the leaderboard when ready to attack.
 `
     writeFileSync(strategyFile, defaultStrategy, 'utf-8')
     console.log(`  Created default strategy at ${strategyFile}`)
@@ -290,7 +298,7 @@ watch(strategyFile, () => {
 function renderAsciiMap(
   state:            Record<string, unknown>,
   nationId:         string,
-  expansionTargets: Array<{ x: number; y: number }>,
+  expansionTargets: Array<{ x: number; y: number; terrain?: string }>,
 ): string {
   type OwnedCell    = { x: number; y: number; terrain: string; army: number }
   type EnemyEntry   = { nation_id: string; nation_name: string; adjacent_cells: Array<{ x: number; y: number; army: number }> }
@@ -317,8 +325,12 @@ function renderAsciiMap(
   // Build cell map: "x,y" -> display char
   const grid = new Map<string, string>()
 
-  // Expansion targets — unclaimed cells adjacent to our frontier
-  for (const t of expansionTargets) grid.set(`${t.x},${t.y}`, '.')
+  // Expansion targets — unclaimed cells; show terrain type
+  // l=land (best income), r=rough (defender bonus), m=mountain (hard to take)
+  const terrainChar: Record<string, string> = { land: 'l', rough: 'r', mountain: 'm', core: 'l' }
+  for (const t of expansionTargets) {
+    grid.set(`${t.x},${t.y}`, terrainChar[t.terrain ?? 'land'] ?? 'l')
+  }
 
   // Visible enemy cells
   for (const e of visibleEnemies) {
@@ -373,7 +385,7 @@ function renderAsciiMap(
   return [
     'TACTICAL MAP (fog of war active):',
     lines.join('\n'),
-    'Legend: C=your core  1-9=your cells (army strength)  .=unclaimed expansion target  UPPER=hostile  lower=NAP ally  (space)=unknown/fogged',
+    'Legend: C=your core  1-9=your cells (army strength)  l=unclaimed land(best)  r=rough  m=mountain  UPPER=hostile  lower=NAP ally  (space)=unknown/fogged',
     `MAP_KEY:${JSON.stringify(keyEntries)}`,
   ].join('\n')
 }
@@ -385,7 +397,7 @@ function buildContext(state: Record<string, unknown>, standingOrders: Order[]): 
     economy:            unknown
     standing:           unknown
     owned_cells:        Array<{ x: number; y: number; terrain: string; army: number; pop_stock: number; pop_max: number; pop_regen: number; connected: boolean }>
-    frontier_cells:     Array<{ x: number; y: number; terrain: string; army: number; enemy_army: number; enemy_nation_id: string | null; enemy_nation_name: string | null; expansion_targets: Array<{ x: number; y: number }> }>
+    frontier_cells:     Array<{ x: number; y: number; terrain: string; army: number; enemy_army: number; enemy_nation_id: string | null; enemy_nation_name: string | null; expansion_targets: Array<{ x: number; y: number; terrain: string }> }>
     disconnected_cells: unknown
     visible_enemies:    unknown
     active_agreements:  unknown
@@ -420,7 +432,7 @@ function buildContext(state: Record<string, unknown>, standingOrders: Order[]): 
   }
 
   const seen = new Set<string>()
-  const expansionTargets: Array<{ x: number; y: number; source_army: number; source_cell: { x: number; y: number } | null }> = []
+  const expansionTargets: Array<{ x: number; y: number; terrain: string; source_army: number; source_cell: { x: number; y: number } | null }> = []
   for (const fc of (s.frontier_cells ?? [])) {
     for (const t of (fc.expansion_targets ?? [])) {
       const k = `${t.x},${t.y}`
@@ -436,7 +448,7 @@ function buildContext(state: Record<string, unknown>, standingOrders: Order[]): 
         const a = ownedArmyByCoord.get(`${n.x},${n.y}`) ?? 0
         if (a > sourceArmy) { sourceArmy = a; sourceCell = n }
       }
-      expansionTargets.push({ x: t.x, y: t.y, source_army: sourceArmy, source_cell: sourceCell })
+      expansionTargets.push({ x: t.x, y: t.y, terrain: t.terrain ?? 'land', source_army: sourceArmy, source_cell: sourceCell })
     }
   }
 
@@ -559,7 +571,8 @@ RULES:
   - reinforce is free (no population cost) — use it to push army from high-army interior cells to stalled frontier source cells.
   - Never advance to a frontier_cell coordinate — those are cells you already own.
   - Only attack/move to adjacent cells (sharing a border)
-  - Only recruit at owned cells with pop_regen > 0
+  - Only recruit at owned cells with pop_regen > 0; max amount = floor(pop_stock / 5). Recruit the maximum each tick — do not under-recruit.
+  - Submit advance orders for EVERY cell in expansion_targets, not a subset — the engine processes them all in parallel each tick.
   - Keep surplus positive — income minus upkeep. Deficit stage 3 causes attrition.
   - Disconnected cells cost more upkeep; reconnect or abandon them
   - Attacking with more army increases your chance of winning
