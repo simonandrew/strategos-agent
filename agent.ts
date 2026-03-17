@@ -253,7 +253,7 @@ function loadStrategy(): string {
 Expansion always comes first. Submit advance orders to every coordinate in the expansion_targets list every tick. Never hold at 1 territory — expanding is the only way to grow income.
 
 If territory < 10: expand aggressively. Accept some deficit temporarily — more cells = more income.
-After each wave of expansion your frontier cells will have army=1 and stall. When this happens, add recruit orders (amount=2) on your highest-pop owned cells alongside your advance orders. This refills army for the next wave.
+After each expansion wave, check expansion_targets for source_army=1 entries — those advances are stalled. Recruit (amount=2) on the source cell (the owned cell adjacent to the stalled target), NOT on interior cells. Interior army cannot reach expansion targets.
 
 If territory >= 10: consolidate before attacking further. Recruit at high-population cells. Only attack when frontier army >= 1.5x the enemy's.
 
@@ -314,12 +314,27 @@ function buildContext(state: Record<string, unknown>, standingOrders: Order[]): 
 
   // Flatten expansion targets into a top-level list so the model can't confuse
   // frontier cell coordinates (owned) with target coordinates (unclaimed).
+  // Also annotate each target with source_army — the highest army of any adjacent
+  // owned cell. Advance only fires if source_army > 1; if it's 1, the model must
+  // recruit on that source cell before the advance will work.
+  const ownedArmyByCoord = new Map<string, number>()
+  for (const cell of (s.owned_cells ?? [])) {
+    ownedArmyByCoord.set(`${cell.x},${cell.y}`, cell.army)
+  }
+
   const seen = new Set<string>()
-  const expansionTargets: Array<{ x: number; y: number }> = []
+  const expansionTargets: Array<{ x: number; y: number; source_army: number }> = []
   for (const fc of (s.frontier_cells ?? [])) {
     for (const t of (fc.expansion_targets ?? [])) {
       const k = `${t.x},${t.y}`
-      if (!seen.has(k)) { seen.add(k); expansionTargets.push(t) }
+      if (seen.has(k)) continue
+      seen.add(k)
+      const neighbors = [
+        { x: t.x - 1, y: t.y }, { x: t.x + 1, y: t.y },
+        { x: t.x, y: t.y - 1 }, { x: t.x, y: t.y + 1 },
+      ]
+      const sourceArmy = Math.max(0, ...neighbors.map(n => ownedArmyByCoord.get(`${n.x},${n.y}`) ?? 0))
+      expansionTargets.push({ x: t.x, y: t.y, source_army: sourceArmy })
     }
   }
 
@@ -332,7 +347,7 @@ function buildContext(state: Record<string, unknown>, standingOrders: Order[]): 
   parts.push(JSON.stringify({
     economy:                 s.economy,
     standing:                s.standing,
-    expansion_targets:       expansionTargets,   // ADVANCE TO THESE — all adjacent unclaimed cells
+    expansion_targets:       expansionTargets,   // source_army=1 means advance is stalled — recruit on that source cell first
     owned_cells:             ownedSorted,        // pop_stock/pop_regen tells you where to recruit
     frontier_cells:          frontierStripped,
     disconnected_cells:      s.disconnected_cells,
@@ -403,8 +418,9 @@ ORDER TYPES:
 
 RULES:
   - advance is your primary expansion tool — submit advance orders for every cell you want to own. The engine handles move-vs-attack automatically. Auto-removed when you own the target.
-  - The top-level expansion_targets list contains every adjacent unclaimed cell you can advance into right now. Submit advance orders using ONLY those coordinates. Never advance to a frontier_cell coordinate — those are cells you already own.
-  - advance only fires if an adjacent owned cell has army > 1. If all your cells have army=1, recruit first to build army, then advance.
+  - The top-level expansion_targets list contains every adjacent unclaimed cell you can advance into. Each entry has source_army — the army of the strongest adjacent owned cell that would be used as the source.
+  - advance ONLY fires if source_army > 1. If source_army = 1, the advance is stalled — you must recruit on that source cell to arm it before the advance will work. Recruiting at interior cells with high army does nothing for expansion.
+  - Never advance to a frontier_cell coordinate — those are cells you already own.
   - Only attack/move to adjacent cells (sharing a border)
   - Only recruit at owned cells with pop_regen > 0
   - Keep surplus positive — income minus upkeep. Deficit stage 3 causes attrition.
