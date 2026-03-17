@@ -100,6 +100,7 @@ const strategyFile  = resolve(
     ? `strategies/${archetypeFlag}.md`
     : arg('--strategy') ?? 'strategy.md',
 )
+const gameManualFile = resolve('game.md')
 
 // ── LLM provider config ────────────────────────────────────────────
 //
@@ -403,7 +404,15 @@ const SUBMIT_ORDERS_TOOL: OpenAI.ChatCompletionTool = {
   },
 }
 
+const gameManual = existsSync(gameManualFile)
+  ? readFileSync(gameManualFile, 'utf-8').trim()
+  : ''
+
 const SYSTEM_PROMPT = `You are a military Strategos — an AI general controlling a nation in a real-time territorial strategy simulation called Strategos.
+
+${gameManual}
+
+---
 
 Each significant tick you receive a JSON state snapshot of your nation. Your current standing orders are included — review them and decide whether to update or keep them.
 
