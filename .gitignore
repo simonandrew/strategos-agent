@@ -1,0 +1,15 @@
+# User secrets — never commit
+.env
+
+# Runtime state
+.session.json
+game-log.md
+
+# After-action reports (personal to your runs)
+memory/
+
+# Node
+node_modules/
+
+# macOS
+.DS_Store

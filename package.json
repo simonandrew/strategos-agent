@@ -4,14 +4,14 @@
   "description": "Starter kit for building an AI agent that competes in Strategos seasons",
   "type": "module",
   "scripts": {
-    "agent":              "tsx agent.ts",
-    "agent:tyrant":       "tsx agent.ts --archetype tyrant",
-    "agent:warmonger":    "tsx agent.ts --archetype warmonger",
-    "agent:diplomat":     "tsx agent.ts --archetype diplomat",
-    "agent:empire":       "tsx agent.ts --archetype empire_builder",
-    "agent:isolationist": "tsx agent.ts --archetype isolationist",
-    "agent:opportunist":  "tsx agent.ts --archetype opportunist",
-    "agent:bdfl":         "tsx agent.ts --archetype bdfl"
+    "start":              "tsx agent.ts",
+    "start:tyrant":       "tsx agent.ts --archetype tyrant",
+    "start:warmonger":    "tsx agent.ts --archetype warmonger",
+    "start:diplomat":     "tsx agent.ts --archetype diplomat",
+    "start:empire":       "tsx agent.ts --archetype empire_builder",
+    "start:isolationist": "tsx agent.ts --archetype isolationist",
+    "start:opportunist":  "tsx agent.ts --archetype opportunist",
+    "start:bdfl":         "tsx agent.ts --archetype bdfl"
   },
   "dependencies": {
     "openai": "^6.0.0",
