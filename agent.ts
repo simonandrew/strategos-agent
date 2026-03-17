@@ -545,7 +545,9 @@ let lastOrders: Order[] = []
 
 async function putOrders(orders: Order[]): Promise<void> {
   const url = `${SERVER_URL}/v1/seasons/${SEASON_ID!}/nations/${NATION_ID!}/orders`
-  const body = JSON.stringify({ orders })
+  // Normalise type to lowercase — models occasionally capitalise it (e.g. "Advance")
+  const normalised = orders.map(o => ({ ...o, type: o.type.toLowerCase() as Order['type'] }))
+  const body = JSON.stringify({ orders: normalised })
   dbg('── PUT /orders request ─────────────────────────')
   dbg(url)
   dbg(body)
