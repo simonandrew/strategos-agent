@@ -263,6 +263,12 @@ function loadStrategy(): string {
 3. REINFORCE — if any expansion_target has source_army=1, use reinforce to push army from a high-army interior cell to that target's source_cell.
    reinforce is free. Always prefer reinforce over recruit to unblock stalled advances if interior army > 1 exists.
 
+4. DEFEND — check the ENEMY CONTACT block. For each threatened cell:
+   - If your army < enemy army: reinforce that cell from a nearby high-army cell immediately.
+   - If enemy army > 2x yours: recruit on that cell too if it has pop_stock.
+   - If overwhelmed (enemy 3x+ your total army): propose_nap to buy time to rebuild.
+   - Never ignore an ENEMY CONTACT warning — a lost cell means lost income.
+
 ## Key rules:
 
 - Expand as a compact blob, not a line. A blob has short borders and high income. A line has long exposed borders and bleeds army.
@@ -480,6 +486,24 @@ function buildContext(state: Record<string, unknown>, standingOrders: Order[]): 
   })() : null
 
   if (stalledBlock) parts.push(stalledBlock)
+
+  // Threat detection — highlight frontier cells where enemy army exceeds ours
+  type FrontierCell = { x: number; y: number; army: number; enemy_army: number; enemy_nation_id: string | null; enemy_nation_name: string | null }
+  const threatenedCells = (s.frontier_cells ?? [] as FrontierCell[])
+    .filter((c: FrontierCell) => c.enemy_army > 0)
+    .sort((a: FrontierCell, b: FrontierCell) => (b.enemy_army - b.army) - (a.enemy_army - a.army))
+
+  if (threatenedCells.length > 0) {
+    const lines = threatenedCells.map((c: FrontierCell) => {
+      const ratio = c.army > 0 ? (c.enemy_army / c.army).toFixed(1) : '∞'
+      const danger = c.enemy_army > c.army * 1.5 ? ' ⚠ DANGER' : ''
+      return `  {x:${c.x},y:${c.y}} your_army=${c.army} vs enemy_army=${c.enemy_army} (ratio ${ratio}x)${danger} — ${c.enemy_nation_name ?? c.enemy_nation_id ?? 'unknown'}`
+    })
+    parts.push(
+      `ENEMY CONTACT — ${threatenedCells.length} frontier cell(s) facing enemy forces:\n${lines.join('\n')}\n` +
+      `Reinforce or recruit on threatened cells immediately. If badly outnumbered, consider retreat or propose_nap.`
+    )
+  }
 
   parts.push(JSON.stringify({
     economy:                 s.economy,
