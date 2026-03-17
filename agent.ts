@@ -52,6 +52,7 @@
 import OpenAI from 'openai'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { readFileSync, writeFileSync, appendFileSync, unlinkSync, mkdirSync, readdirSync, watch, existsSync } from 'node:fs'
+import { createInterface } from 'node:readline'
 import { resolve } from 'node:path'
 import { config as loadDotenv } from 'dotenv'
 
@@ -718,14 +719,28 @@ mgmtServer.listen(MGMT_PORT, () => {
 ${sessionInfo}
   Mgmt API  → http://localhost:${mgmtPortActual}
 
-  Update strategy:
-    curl -X PUT http://localhost:${mgmtPortActual}/strategy -d "your new strategy"
-
-  Issue a decree:
-    curl -X POST http://localhost:${mgmtPortActual}/decree \\
-      -H "Content-Type: application/json" \\
-      -d '{"text":"Attack the Tyrant — they are isolated"}'
+  Issue a decree: type anything and press Enter
 `)
+})
+
+// ── Terminal decree input ──────────────────────────────────────────
+
+const rl = createInterface({ input: process.stdin, terminal: false })
+
+rl.on('line', async (line) => {
+  const text = line.trim()
+  if (!text || !SEASON_ID || !NATION_ID) return
+  const url = `${SERVER_URL}/v1/seasons/${SEASON_ID}/nations/${NATION_ID}/decrees`
+  try {
+    const r = await fetch(url, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TOKEN}` },
+      body:    JSON.stringify({ text }),
+    })
+    console.log(`  decree ${r.ok ? 'issued' : `failed (${r.status})`}: "${text}"`)
+  } catch (err) {
+    console.error('  decree error:', err)
+  }
 })
 
 // ── Auto-join ──────────────────────────────────────────────────────
