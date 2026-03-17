@@ -250,7 +250,7 @@ function loadStrategy(): string {
   if (!existsSync(strategyFile)) {
     const defaultStrategy = `# My Strategos
 
-Expansion always comes first. Submit advance orders to every unclaimed cell adjacent to my territory every tick. Never hold at 1 territory — expanding is the only way to grow income.
+Expansion always comes first. Submit advance orders to every coordinate in the expansion_targets list every tick. Never hold at 1 territory — expanding is the only way to grow income.
 
 If territory < 10: expand aggressively. Accept some deficit temporarily — more cells = more income.
 After each wave of expansion your frontier cells will have army=1 and stall. When this happens, add recruit orders (amount=2) on your highest-pop owned cells alongside your advance orders. This refills army for the next wave.
@@ -287,7 +287,7 @@ function buildContext(state: Record<string, unknown>, standingOrders: Order[]): 
   const s = state as {
     economy:            unknown
     standing:           unknown
-    frontier_cells:     unknown
+    frontier_cells:     Array<{ x: number; y: number; terrain: string; army: number; enemy_army: number; enemy_nation_id: string | null; enemy_nation_name: string | null; expansion_targets: Array<{ x: number; y: number }> }>
     disconnected_cells: unknown
     visible_enemies:    unknown
     active_agreements:  unknown
@@ -311,10 +311,25 @@ function buildContext(state: Record<string, unknown>, standingOrders: Order[]): 
     parts.push(`ACTIVE DECREES — implement these immediately, they override your strategy:\n${lines.join('\n')}`)
   }
 
+  // Flatten expansion targets into a top-level list so the model can't confuse
+  // frontier cell coordinates (owned) with target coordinates (unclaimed).
+  const seen = new Set<string>()
+  const expansionTargets: Array<{ x: number; y: number }> = []
+  for (const fc of (s.frontier_cells ?? [])) {
+    for (const t of (fc.expansion_targets ?? [])) {
+      const k = `${t.x},${t.y}`
+      if (!seen.has(k)) { seen.add(k); expansionTargets.push(t) }
+    }
+  }
+
+  // Strip expansion_targets from individual frontier cells — it's now at top level
+  const frontierStripped = (s.frontier_cells ?? []).map(({ expansion_targets: _, ...rest }) => rest)
+
   parts.push(JSON.stringify({
     economy:                 s.economy,
     standing:                s.standing,
-    frontier_cells:          s.frontier_cells,
+    expansion_targets:       expansionTargets,   // ADVANCE TO THESE — all adjacent unclaimed cells
+    frontier_cells:          frontierStripped,
     disconnected_cells:      s.disconnected_cells,
     visible_enemies:         s.visible_enemies,
     active_agreements:       s.active_agreements,
@@ -379,7 +394,7 @@ ORDER TYPES:
 
 RULES:
   - advance is your primary expansion tool — submit advance orders for every cell you want to own. The engine handles move-vs-attack automatically. Auto-removed when you own the target.
-  - Use expansion_targets from each frontier cell for advance order coordinates — these are the exact adjacent unclaimed non-water cells you can claim. Never advance to a coordinate not in expansion_targets.
+  - The top-level expansion_targets list contains every adjacent unclaimed cell you can advance into right now. Submit advance orders using ONLY those coordinates. Never advance to a frontier_cell coordinate — those are cells you already own.
   - advance only fires if an adjacent owned cell has army > 1. If all your cells have army=1, recruit first to build army, then advance.
   - Only attack/move to adjacent cells (sharing a border)
   - Only recruit at owned cells with pop_regen > 0
